@@ -1,0 +1,64 @@
+{
+    "Comment": "A state machine to demonstrate how Step Functions can invoke EventBridge API destinations",
+    "StartAt": "RecognizeCelebrities",
+    "States": {
+      "RecognizeCelebrities": {
+        "Type": "Task",
+        "Parameters": {
+          "Image": {
+            "S3Object": {
+              "Bucket.$": "$.detail.bucket.name",
+              "Name.$": "$.detail.object.key"
+            }
+          }
+        },
+        "Resource": "arn:aws:states:::aws-sdk:rekognition:recognizeCelebrities",
+        "ResultPath": "$.response.celebrities",
+        "Next": "Map"
+      },
+      "Map": {
+        "Type": "Map",
+        "ItemProcessor": {
+          "ProcessorConfig": {
+            "Mode": "INLINE"
+          },
+          "StartAt": "EventBridge PutEvents",
+          "States": {
+            "EventBridge PutEvents": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:eventbridge:putEvents",
+              "Parameters": {
+                "Entries": [
+                  {
+                    "Detail": {
+                        "dataSource": "Cluster0",
+                        "database": "celebrities",
+                        "collection": "recognized_celebrity",
+                        "document":{
+                            "image_name.$": "$.DocumentName",
+                            "match_confidence.$": "States.Format('{}',$.CelebJSON.MatchConfidence)",
+                            "celeb_name.$": "$.CelebJSON.Name",
+                            "url.$": "States.ArrayGetItem($.CelebJSON.Urls,0)"
+                        }
+                    },
+                    "DetailType": "mdb-api-destination",
+                    "EventBusName": "${EBBus}",
+                    "Source": "sfn-api-destination"
+                  }
+                ]
+              },
+              "End": true
+            }
+          }
+        },
+        "End": true,
+        "ItemsPath": "$.response.celebrities.CelebrityFaces",
+        "ItemSelector": {
+          "CelebIndex.$": "$$.Map.Item.Index",
+          "CelebJSON.$": "$$.Map.Item.Value",
+          "DocumentName.$": "$.detail.object.key"
+        },
+        "ResultPath": "$.mapResult"
+      }
+    }
+  }

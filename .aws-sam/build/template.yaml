@@ -1,0 +1,180 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'Sample application to demonstrate orchestration and choreography in
+  AWS Serverless with AWS Step Functions and Amazon EventBridge
+
+  '
+Parameters:
+  MongoDBDataURL:
+    Type: String
+    Default: https://data.mongodb-api.com/app/<data-app>/endpoint/data/beta/action/
+  MyAPIKeyName:
+    Type: String
+    Default: <<Enter your APIKeyName>>
+  MongoDBAPIKeyValue:
+    NoEcho: true
+    Type: String
+    Default: <<Enter your APIKeyValue>>
+  MongoDBCustomEventBus:
+    Type: String
+    Default: <<CustomBusName>>
+Resources:
+  CelebBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true
+  CustomerManagedPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action: rekognition:RecognizeCelebrities
+          Resource: '*'
+        - Effect: Allow
+          Action: events:PutEvents
+          Resource: '*'
+  SfnEBStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: ../../state-machine/rekognize-eb-api-destination.asl.json
+      DefinitionSubstitutions:
+        EBBus:
+          Ref: MyEventBus
+      Policies:
+      - Ref: CustomerManagedPolicy
+      - S3ReadPolicy:
+          BucketName:
+            Ref: CelebBucket
+      Events:
+        StateChange:
+          Type: EventBridgeRule
+          Properties:
+            EventBusName: default
+            Pattern:
+              source:
+              - aws.s3
+              detail-type:
+              - Object Created
+              detail:
+                bucket:
+                  name:
+                  - Ref: CelebBucket
+  MyEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name:
+        Ref: MongoDBCustomEventBus
+  MyConnection:
+    Type: AWS::Events::Connection
+    Properties:
+      AuthorizationType: API_KEY
+      Description: My connection with an API key
+      AuthParameters:
+        ApiKeyAuthParameters:
+          ApiKeyName:
+            Ref: MyAPIKeyName
+          ApiKeyValue:
+            Ref: MongoDBAPIKeyValue
+  MyApiDestination:
+    Type: AWS::Events::ApiDestination
+    Properties:
+      Name: MongoDBAPIDestination
+      ConnectionArn:
+        Fn::GetAtt:
+        - MyConnection
+        - Arn
+      InvocationEndpoint:
+        Ref: MongoDBDataURL
+      HttpMethod: POST
+      InvocationRateLimitPerSecond: 10
+  EventBridgeTargetRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - events.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Policies:
+      - PolicyName: AllowAPIdestinationAccess
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action: events:InvokeApiDestination
+            Resource:
+              Fn::GetAtt:
+              - MyApiDestination
+              - Arn
+  MyDLQueue:
+    Type: AWS::SQS::Queue
+  EventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: EventRule
+      State: ENABLED
+      EventBusName:
+        Ref: MyEventBus
+      EventPattern:
+        source:
+        - sfn-api-destination
+      Targets:
+      - Arn:
+          Fn::GetAtt:
+          - MyApiDestination
+          - Arn
+        RoleArn:
+          Fn::GetAtt:
+          - EventBridgeTargetRole
+          - Arn
+        Id: MyAPIdestination
+        DeadLetterConfig:
+          Arn:
+            Fn::GetAtt:
+            - MyDLQueue
+            - Arn
+Outputs:
+  MyEventBusName:
+    Description: Application EventBus Name
+    Value:
+      Ref: MyEventBus
+  MyEventBusArn:
+    Description: Application EventBus ARN
+    Value:
+      Fn::GetAtt:
+      - MyEventBus
+      - Arn
+  MyConnectionName:
+    Value:
+      Ref: MyConnection
+  MyConnectionArn:
+    Value:
+      Fn::GetAtt:
+      - MyConnection
+      - Arn
+  MyApiDestinationName:
+    Value:
+      Ref: MyApiDestination
+  MyApiDestinationArn:
+    Value:
+      Fn::GetAtt:
+      - MyApiDestination
+      - Arn
+  EventBridgeTargetRoleArn:
+    Value:
+      Fn::GetAtt:
+      - EventBridgeTargetRole
+      - Arn
+  MyDLQueue:
+    Value:
+      Fn::GetAtt:
+      - MyDLQueue
+      - Arn
